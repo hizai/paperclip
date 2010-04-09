@@ -15,10 +15,10 @@ module Paperclip
       @name = name
       @attachment = attachment
       if definition.is_a? Hash
-        @geometry = definition.delete(:geometry)
-        @format = definition.delete(:format)
-        @processors = definition.delete(:processors)
-        @other_args = definition
+        stored_options = [:geometry, :format, :processors].each do |option|
+          instance_variable_set("@#{option}", definition[option])
+        end
+        @other_args = definition.except(stored_options)
       else
         @geometry, @format = [definition, nil].flatten[0..1]
         @other_args = {}
