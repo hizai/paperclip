@@ -36,8 +36,10 @@ require 'paperclip/storage'
 require 'paperclip/interpolations'
 require 'paperclip/style'
 require 'paperclip/attachment'
-if defined? RAILS_ROOT
-  Dir.glob(File.join(File.expand_path(RAILS_ROOT), "lib", "paperclip_processors", "*.rb")).each do |processor|
+require 'paperclip/callback_compatability'
+require 'paperclip/railtie'
+if defined?(Rails.root) && Rails.root
+  Dir.glob(File.join(File.expand_path(Rails.root), "lib", "paperclip_processors", "*.rb")).each do |processor|
     require processor
   end
 end
@@ -46,7 +48,7 @@ end
 # documentation for Paperclip::ClassMethods for more useful information.
 module Paperclip
 
-  VERSION = "2.3.1.1"
+  VERSION = "2.3.2.beta1"
 
   class << self
     # Provides configurability to Paperclip. There are a number of options available, such as:
@@ -67,6 +69,10 @@ module Paperclip
         :log_command       => false,
         :swallow_stderr    => true
       }
+    end
+
+    def configure
+      yield(self) if block_given?
     end
 
     def path_for_command command #:nodoc:
@@ -111,8 +117,10 @@ module Paperclip
 
     def included base #:nodoc:
       base.extend ClassMethods
-      unless base.respond_to?(:define_callbacks)
-        base.send(:include, Paperclip::CallbackCompatability)
+      if base.respond_to?("set_callback")
+        base.send :include, Paperclip::CallbackCompatability::Rails3
+      else
+        base.send :include, Paperclip::CallbackCompatability::Rails21
       end
     end
 
@@ -222,9 +230,8 @@ module Paperclip
       after_save :save_attached_files
       before_destroy :destroy_attached_files
 
-      define_callbacks :before_post_process, :after_post_process
-      define_callbacks :"before_#{name}_post_process", :"after_#{name}_post_process"
-     
+      define_paperclip_callbacks :post_process, :"#{name}_post_process"
+
       define_method name do |*args|
         a = attachment_for(name)
         (args.length > 0) ? a.to_s(args.first) : a
@@ -308,7 +315,12 @@ module Paperclip
       types = [options.delete(:content_type)].flatten
       validates_each(:"#{name}_content_type", options) do |record, attr, value|
         unless types.any?{|t| t === value }
-          record.errors.add(:"#{name}_content_type", :inclusion, :default => options[:message], :value => value)
+          if record.errors.method(:add).arity == -2
+            message = options[:message] || "is not one of #{types.join(", ")}"
+            record.errors.add(:"#{name}_content_type", message)
+          else
+            record.errors.add(:"#{name}_content_type", :inclusion, :default => options[:message], :value => value)
+          end
         end
       end
     end
@@ -333,14 +345,14 @@ module Paperclip
     end
 
     def save_attached_files
-      logger.info("[paperclip] Saving attachments.")
+      Paperclip.log("Saving attachments.")
       each_attachment do |name, attachment|
         attachment.send(:save)
       end
     end
 
     def destroy_attached_files
-      logger.info("[paperclip] Deleting attachments.")
+      Paperclip.log("Deleting attachments.")
       each_attachment do |name, attachment|
         attachment.send(:queue_existing_for_delete)
         attachment.send(:flush_deletes)
@@ -348,10 +360,4 @@ module Paperclip
     end
   end
 
-end
-
-# Set it all up.
-if Object.const_defined?("ActiveRecord")
-  ActiveRecord::Base.send(:include, Paperclip)
-  File.send(:include, Paperclip::Upfile)
 end

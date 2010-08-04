@@ -41,34 +41,24 @@ class PaperclipTest < Test::Unit::TestCase
   end
 
   context "Calling Paperclip.run and logging" do
-    setup do
+    should "log the command when :log_command is true" do
       Paperclip.options[:image_magick_path] = nil
       Paperclip.options[:command_path]      = nil
       Paperclip.stubs(:bit_bucket).returns("/dev/null")
-      Paperclip.stubs(:log)
-      Paperclip.stubs(:"`").with("this is the command 2>/dev/null")
-    end
-
-    should "log the command when :log_command is true" do
+      Paperclip.expects(:log).with("this is the command 2>/dev/null")
+      Paperclip.expects(:"`").with("this is the command 2>/dev/null")
       Paperclip.options[:log_command] = true
       Paperclip.run("this","is the command")
-      assert_received(Paperclip, :log) do |p|
-        p.with("this is the command 2>/dev/null")
-      end
-      assert_received(Paperclip, :`) do |p|
-        p.with("this is the command 2>/dev/null")
-      end
     end
 
     should "not log the command when :log_command is false" do
+      Paperclip.options[:image_magick_path] = nil
+      Paperclip.options[:command_path]      = nil
+      Paperclip.stubs(:bit_bucket).returns("/dev/null")
+      Paperclip.expects(:log).with("this is the command 2>/dev/null").never
+      Paperclip.expects(:"`").with("this is the command 2>/dev/null")
       Paperclip.options[:log_command] = false
       Paperclip.run("this","is the command")
-      assert_received(Paperclip, :log) do |p|
-        p.with("this is the command 2>/dev/null").never
-      end
-      assert_received(Paperclip, :`) do |p|
-        p.with("this is the command 2>/dev/null")
-      end
     end
   end
 
@@ -236,11 +226,11 @@ class PaperclipTest < Test::Unit::TestCase
           end
           if validation == :presence
             should "have an error on the attachment" do
-              assert @dummy.errors.on(:avatar_file_name)
+              assert @dummy.errors[:avatar_file_name]
             end
           else
             should "not have an error on the attachment" do
-              assert_nil @dummy.errors.on(:avatar_file_name), @dummy.errors.full_messages.join(", ")
+              assert @dummy.errors[:avatar_file_name].blank?, @dummy.errors.full_messages.join(", ")
             end
           end
         end
@@ -289,7 +279,7 @@ class PaperclipTest < Test::Unit::TestCase
         end
         
         should "have a file size min/max error message" do
-          assert_match %r/between 0 and 10240 bytes/, @dummy.errors.on(:avatar_file_size)
+          assert @dummy.errors[:avatar_file_size].any?{|e| e.match %r/between 0 and 10240 bytes/ }
         end
       end
     end
