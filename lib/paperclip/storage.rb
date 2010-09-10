@@ -127,29 +127,33 @@ module Paperclip
     #   to interpolate. Keys should be unique, like filenames, and despite the fact that
     #   S3 (strictly speaking) does not support directories, you can still use a / to
     #   separate parts of your file name.
+
     module S3
       def self.extended base
         begin
-          require 'aws/s3'
+          require "s3"
         rescue LoadError => e
-          e.message << " (You may need to install the aws-s3 gem)"
+          e.message << " (You may need to install the s3 gem)"
           raise e
         end
 
         base.instance_eval do
-          @s3_credentials = parse_credentials(@options[:s3_credentials])
-          @bucket         = @options[:bucket]         || @s3_credentials[:bucket]
-          @bucket         = @bucket.call(self) if @bucket.is_a?(Proc)
-          @s3_options     = @options[:s3_options]     || {}
-          @s3_permissions = @options[:s3_permissions] || :public_read
-          @s3_protocol    = @options[:s3_protocol]    || (@s3_permissions == :public_read ? 'http' : 'https')
-          @s3_headers     = @options[:s3_headers]     || {}
-          @s3_host_alias  = @options[:s3_host_alias]
-          @url            = ":s3_path_url" unless @url.to_s.match(/^:s3.*url$/)
-          AWS::S3::Base.establish_connection!( @s3_options.merge(
+          @s3_credentials   = parse_credentials(@options[:s3_credentials])
+          @bucket_name      = @options[:bucket]           || @s3_credentials[:bucket]
+          @bucket_name      = @bucket_name.call(self) if @bucket_name.is_a?(Proc)
+          @s3_options       = @options[:s3_options]       || {}
+          @s3_permissions   = @options[:s3_permissions]   || :public_read
+          @s3_storage_class = @options[:s3_storage_class] || :standard
+          @s3_protocol      = @options[:s3_protocol]      || (@s3_permissions == :public_read ? "http" : "https")
+          @s3_headers       = @options[:s3_headers]       || {}
+          @s3_host_alias    = @options[:s3_host_alias]
+          @url              = ":s3_path_url" unless @url.to_s.match(/^:s3.*url$/)
+          @service = ::S3::Service.new(@s3_options.merge(
             :access_key_id => @s3_credentials[:access_key_id],
-            :secret_access_key => @s3_credentials[:secret_access_key]
+            :secret_access_key => @s3_credentials[:secret_access_key],
+            :use_ssl => @s3_protocol == "https"
           ))
+          @bucket = @service.buckets.build(@bucket_name)
         end
         Paperclip.interpolates(:s3_alias_url) do |attachment, style|
           "#{attachment.s3_protocol}://#{attachment.s3_host_alias}/#{attachment.path(style).gsub(%r{^/}, "")}"
@@ -162,11 +166,15 @@ module Paperclip
         end
       end
 
-      def expiring_url(time = 3600)
-        AWS::S3::S3Object.url_for(path, bucket_name, :expires_in => time )
+      def expiring_url(style_name = default_style, time = 3600)
+        bucket.objects.build(path(style_name)).temporary_url(Time.now + time)
       end
 
       def bucket_name
+        @bucket_name
+      end
+
+      def bucket
         @bucket
       end
 
@@ -181,7 +189,7 @@ module Paperclip
 
       def exists?(style = default_style)
         if original_filename
-          AWS::S3::S3Object.exists?(path(style), bucket_name)
+          bucket.objects.build(path(style)).exists?
         else
           false
         end
@@ -195,23 +203,31 @@ module Paperclip
       # style, in the format most representative of the current storage.
       def to_file style = default_style
         return @queued_for_write[style] if @queued_for_write[style]
-        file = Tempfile.new(path(style))
-        file.write(AWS::S3::S3Object.value(path(style), bucket_name))
-        file.rewind
-        return file
+        begin
+          file = Tempfile.new(path(style))
+          file.binmode if file.respond_to?(:binmode)
+          file.write(bucket.objects.find(path(style)).content)
+          file.rewind
+        rescue ::S3::Error::NoSuchKey
+          file.close if file.respond_to?(:close)
+          file = nil
+        end
+        file
       end
 
       def flush_writes #:nodoc:
         @queued_for_write.each do |style, file|
           begin
             log("saving #{path(style)}")
-            AWS::S3::S3Object.store(path(style),
-                                    file,
-                                    bucket_name,
-                                    {:content_type => instance_read(:content_type),
-                                     :access => @s3_permissions,
-                                    }.merge(@s3_headers))
-          rescue AWS::S3::ResponseError => e
+            object = bucket.objects.build(path(style))
+            object.content = file.read
+            object.acl = @s3_permissions
+            object.storage_class = @s3_storage_class
+            object.content_type = instance_read(:content_type)
+            object.content_disposition = @s3_headers[:content_disposition]
+            object.content_encoding = @s3_headers[:content_encoding]
+            object.save
+          rescue ::S3::Error::ResponseError => e
             raise
           end
         end
@@ -222,8 +238,8 @@ module Paperclip
         @queued_for_delete.each do |path|
           begin
             log("deleting #{path}")
-            AWS::S3::S3Object.delete(path, bucket_name)
-          rescue AWS::S3::ResponseError
+            bucket.objects.find(path).destroy
+          rescue ::S3::Error::ResponseError
             # Ignore this.
           end
         end
