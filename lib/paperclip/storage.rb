@@ -226,6 +226,7 @@ module Paperclip
             object.content_type = instance_read(:content_type)
             object.content_disposition = @s3_headers[:content_disposition]
             object.content_encoding = @s3_headers[:content_encoding]
+            object.cache_control = @s3_headers[:cache_control]
             object.save
           rescue ::S3::Error::ResponseError => e
             raise
