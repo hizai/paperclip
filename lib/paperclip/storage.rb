@@ -156,7 +156,8 @@ module Paperclip
           @bucket = @service.buckets.build(@bucket_name)
         end
         Paperclip.interpolates(:s3_alias_url) do |attachment, style|
-          "#{attachment.s3_protocol}://#{attachment.s3_host_alias}/#{attachment.path(style).gsub(%r{^/}, "")}"
+          host = (attachment.s3_host_alias =~ /%d/) ? attachment.s3_host_alias % (rand(4) + 1) : attachment.s3_host_alias.to_s
+          "#{attachment.s3_protocol}://#{host}/#{attachment.path(style).gsub(%r{^/}, "")}"
         end
         Paperclip.interpolates(:s3_path_url) do |attachment, style|
           "#{attachment.s3_protocol}://s3.amazonaws.com/#{attachment.bucket_name}/#{attachment.path(style).gsub(%r{^/}, "")}"
